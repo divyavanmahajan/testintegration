@@ -1,0 +1,210 @@
+[
+  {
+    "type": "dlt-view",
+    "name": "vbap",
+    "sql": "SELECT v.*\nFROM live.vbak header\n  INNER JOIN {schema}.vbap v ON header.vbeln = v.vbeln\nWHERE v.mandt = '{mandt}'",
+    "comment": "SAP Sales Document: Item Data Table and data",
+    "index": 1
+  },
+  {
+    "type": "dlt-view",
+    "name": "mara",
+    "sql": "SELECT matnr, bismt\nFROM {schema}.mara\nWHERE mandt = '{mandt}'",
+    "comment": "Material Data Table and data",
+    "index": 2
+  },
+  {
+    "type": "dlt-view",
+    "name": "vbfa",
+    "sql": "SELECT\n  mandt,\n  vbelv,\n  posnv,\n  vbeln,\n  posnn,\n  vbtyp_n,\n  vbtyp_v,\n  erdat,\n  aedat,\n  rfmng\nFROM {schema}.vbfa\nWHERE mandt = '{mandt}' AND VBTYP_N = 'M'",
+    "comment": "Sales Document Flow Table and data",
+    "index": 3
+  },
+  {
+    "type": "dlt-view",
+    "name": "vbrk",
+    "sql": "SELECT mandt, vbeln, fkart, erdat\nFROM {schema}.vbrk\nWHERE mandt = '{mandt}' AND fkart = 'ZPMS'",
+    "comment": "Billing Document: Header Data Table and data ",
+    "index": 4
+  },
+  {
+    "type": "dlt-nest",
+    "name": "vbfa_vbrk",
+    "sql": "SELECT\n  a.vbeln AS InvoiceNumber,\n  a.vbelv,\n  DATE_FORMAT(TO_DATE(b.erdat, 'yyyyMMdd'), 'yyyy-MM-dd') AS InvoiceDate,\n  a.posnv\nFROM live.vbap v\n  INNER JOIN live.vbfa a ON v.vbeln = a.vbelv AND v.posnr = a.posnv\n  INNER JOIN live.vbrk b ON a.vbeln = b.vbeln AND a.VBTYP_N = 'M' AND b.FKART = 'ZPMS'",
+    "comment": "Invoice Details",
+    "nested": {
+      "keycolumns": [
+        "vbelv",
+        "posnv"
+      ],
+      "name": "Invoice",
+      "partitionkeys": []
+    },
+    "index": 5
+  },
+  {
+    "type": "dlt-table",
+    "name": "vbep",
+    "sql": "SELECT\n  v.vbeln,\n  v.posnr,\n  vbep.etenr,\n  vbep.bmeng,\n  vbep.edatu\nFROM live.vbap v\n  INNER JOIN {schema}.vbep vbep ON v.vbeln = vbep.vbeln AND v.posnr = vbep.posnr AND vbep.mandt = '{mandt}'",
+    "comment": "Schedule lines",
+    "index": 6
+  },
+  {
+    "type": "dlt-view",
+    "name": "vbep_deliverydate",
+    "sql": "SELECT\n  DATE_FORMAT(TO_DATE(EDATU, 'yyyyMMdd'), 'yyyy-MM-dd') AS DeliveryDate,\n  vbep.vbeln,\n  vbep.posnr,\n  vbep.etenr\nFROM\n  live.vbep vbep\nWHERE bmeng <> 0\nLIMIT 1",
+    "comment": "Delivery Date",
+    "index": 7
+  },
+  {
+    "type": "dlt-view",
+    "name": "vbep_requireddeliverydate",
+    "sql": "SELECT\n  DATE_FORMAT(TO_DATE(EDATU, 'yyyyMMdd'), 'yyyy-MM-dd') AS RequiredDeliveryDate,\n  vbep.vbeln,\n  vbep.posnr,\n  vbep.etenr\nFROM\n  live.vbep vbep\nWHERE bmeng = 0\nLIMIT 1",
+    "comment": "Required Delivery Date",
+    "index": 8
+  },
+  {
+    "type": "dlt-view",
+    "name": "status_dates_VBP",
+    "sql": "SELECT\n  SalesOrder,\n  SalesOrderLine,\n  updateTime,\n  status -- SalesOrder,SalesOrderLine,status,description,stat,isActive,lastActiveTime,updateTime\nFROM\n  delta.`dbfs:/pipelines/1d11ac7f-539c-4b04-a476-aeac5e929b3f/tables/status_dates_{kernel}_VBP` --from deltalive.status_dates_{kernel}_VBP\n  INNER JOIN live.vbap vk ON SalesOrder = vk.vbeln\n  AND SalesOrderLine = vk.posnr\nWHERE isActive = TRUE",
+    "comment": "Statuses of Sales Order Line Items",
+    "index": 9
+  },
+  {
+    "type": "dlt-table",
+    "temporary": false,
+    "name": "myp4p_salesorderlineitem_{kernel}{testsuffix}",
+    "comment": "MyP4P SalesOrderLineItem .",
+    "sql": "SELECT\n  '{kernel}' AS sysid,\n  v.vbeln AS SalesOrder,\n  --Line items details\n  ---Line grouping information\n  v.posnr AS SalesOrderLineID,\n  v.uepos AS ChapterInfo,\n  v.grkor AS DeliveryGroup,\n  --Display Grouped line together\n  --Complete/Partial delivery info\n  v.kztlf AS LineItemFlag,\n  --Material description\n  v.matnr AS MaterialNumber,\n  v.matwa AS MaterialEntered,\n  v.ean11 AS MaterialEAN,\n  v.kdmat AS CustomerMaterial,\n  m.bismt AS OldMaterialNo,\n  v.arktx AS MaterialDescription,\n  --Quantity/Value\n  v.kwmeng AS Quantity,\n  v.netpr AS UnitPrice_OrderValue,\n  v.netwr AS TotalPrice,\n  --Invoice\n  vfrk.Invoice,\n  --Factory PO\n  v.zzpmgsono AS FactoryPONo,\n  v.zzpmgsoln AS FactoryPOLine,\n  --RDD\n  rdd.RequiredDeliveryDate,\n  --Estimated Delivery date\n  deldate.DeliveryDate,\n  --vep.edatu as  ConfirmedDeliveryDate,\n  --Flags and warnings\n  v.pstyv AS ItemCategory,\n  v.pstyv AS BackOrder,\n  v.abgru AS RejectedReason,\n  --Excel Extract\n  --Status\n  STRUCT(\n    CASE\n      WHEN S_OH.updateTime IS NOT NULL THEN 'Y'\n      ELSE 'N'\n    END AS OnHold,\n    S_OH.updateTime AS OnHoldSetDate,\n    CASE\n      WHEN S_Z2.updateTime IS NOT NULL THEN 'Y'\n      ELSE 'N'\n    END AS LineConfirmed,\n    S_Z2.updateTime AS LineConfirmedSetDate,\n    CASE\n      WHEN S_Z7_Z8.updateTime IS NOT NULL THEN 'Y'\n      ELSE 'N'\n    END AS LineShipped,\n    S_Z7_Z8.updateTime AS LineShippedSetDate,\n    CASE\n      WHEN S_Z9.updateTime IS NOT NULL THEN 'Y'\n      ELSE 'N'\n    END AS LineArrivedMerge,\n    S_Z9.updateTime AS LineArrivedMergeSetDate,\n    CASE\n      WHEN S_Z10.updateTime IS NOT NULL THEN 'Y'\n      ELSE 'N'\n    END AS LineDelivered,\n    S_Z10.updateTime AS LineDeliveredSetDate,\n    CASE\n      WHEN S_S8.updateTime IS NOT NULL THEN 'Y'\n      ELSE 'N'\n    END AS LineInvoiced,\n    S_S8.updateTime AS LineInvoicedSetDate\n  ) AS LineItemStatus\nFROM\n  live.vbap v\n  LEFT JOIN live.mara m ON v.matnr = m.matnr\n  LEFT JOIN live.vbfa_vbrk vfrk ON v.vbeln = vfrk.vbelv\n  AND v.posnr = vfrk.posnv\n  LEFT JOIN live.vbep_deliverydate deldate ON v.vbeln = deldate.vbeln\n  AND deldate.posnr = v.posnr\n  LEFT JOIN live.vbep_requireddeliverydate rdd ON v.vbeln = rdd.vbeln\n  AND rdd.posnr = v.posnr\n  LEFT JOIN live.status_dates_VBP S_OH ON v.vbeln = S_OH.SalesOrder\n  AND v.posnr = S_OH.SalesOrderLine\n  AND S_OH.status = 'OH'\n  LEFT JOIN live.status_dates_VBP S_S8 ON v.vbeln = S_S8.SalesOrder\n  AND v.posnr = S_S8.SalesOrderLine\n  AND S_S8.status = 'S8'\n  LEFT JOIN live.status_dates_VBP S_Z2 ON v.vbeln = S_OH.SalesOrder\n  AND v.posnr = S_Z2.SalesOrderLine\n  AND S_Z2.status = 'Z2'\n  LEFT JOIN live.status_dates_VBP S_Z7_Z8 ON v.vbeln = S_OH.SalesOrder\n  AND v.posnr = S_Z7_Z8.SalesOrderLine\n  AND (\n    S_Z7_Z8.status = 'Z7'\n    OR S_Z7_Z8.status = 'Z8'\n  )\n  LEFT JOIN live.status_dates_VBP S_Z9 ON v.vbeln = S_OH.SalesOrder\n  AND v.posnr = S_Z9.SalesOrderLine\n  AND S_Z9.status = 'Z9'\n  LEFT JOIN live.status_dates_VBP S_Z10 ON v.vbeln = S_OH.SalesOrder\n  AND v.posnr = S_Z10.SalesOrderLine\n  AND S_Z10.status = 'Z10'\nORDER BY sysid, SalesOrder, SalesOrderLineID",
+    "index": 10
+  },
+  {
+    "type": "dlt-view",
+    "name": "vbuk",
+    "sql": "SELECT *\nFROM {schema}.vbuk\nWHERE mandt = '{mandt}' {vbeln_filter}",
+    "comment": "Sales Doc.: Header Status and Administrative Data",
+    "index": 11
+  },
+  {
+    "type": "dlt-view",
+    "name": "vbak",
+    "sql": "SELECT *\nFROM {schema}.vbak\nWHERE mandt = '{mandt}' {vbeln_filter}",
+    "comment": "Sales Document: Header Data ",
+    "index": 12
+  },
+  {
+    "type": "dlt-view",
+    "name": "vbpa",
+    "sql": "SELECT vbeln, parvw, adrnr, kunnr\nFROM {schema}.vbpa\nWHERE\n  mandt = '{mandt}'\n  AND posnr = '000000'\n  AND parvw IN ('AG', 'WE', 'RE', 'RG', 'ZU') {vbeln_filter}",
+    "comment": "Sales Document: Partner",
+    "index": 13
+  },
+  {
+    "type": "dlt-view",
+    "name": "adrc",
+    "sql": "SELECT *\nFROM {schema}.adrc\nWHERE client = '{mandt}' AND langu = 'E'",
+    "comment": "SAP Addresses (Business Address Services)",
+    "index": 14
+  },
+  {
+    "type": "dlt-view",
+    "name": "t005t",
+    "sql": "SELECT *\nFROM {schema}.t005t\nWHERE mandt = '{mandt}' AND SPRAS = 'E'",
+    "comment": "SAP Country Names Table and data",
+    "index": 15
+  },
+  {
+    "type": "dlt-view",
+    "name": "vbpa_adrc",
+    "sql": "SELECT\n  vbeln,\n  parvw,\n  kunnr AS PartnerNumber,\n  a.Name1 AS Name,\n  STRUCT(\n    a.HOUSE_NUM1 AS HOUSE_NUMBER,\n    a.STREET,\n    a.CITY1 AS CITY,\n    a.REGION,\n    a.ADDRNUMBER\n  ) AS Address,\n  a.Country AS CountryCode,\n  t.LANDX AS CountryName,\n  a.POST_CODE1 AS PostalCode\nFROM live.vbpa v\n  LEFT JOIN live.adrc a ON v.adrnr = a.addrnumber\n  LEFT JOIN live.t005t t ON a.Country = t.LAND1",
+    "comment": "Sales Document: Partner with Address ",
+    "index": 16
+  },
+  {
+    "type": "dlt-view",
+    "name": "vbpa_soldto",
+    "sql": "SELECT\n  vbeln,\n  STRUCT(\n    va.PartnerNumber,\n    va.Name,\n    va.Address,\n    va.CountryCode,\n    va.CountryName,\n    va.PostalCode\n  ) AS SoldToParty\nFROM live.vbpa_adrc va\nWHERE parvw = 'AG'",
+    "comment": "Sold To Partner ",
+    "index": 17
+  },
+  {
+    "type": "dlt-view",
+    "name": "vbpa_shipto",
+    "sql": "SELECT\n  vbeln,\n  STRUCT(\n    va.PartnerNumber,\n    va.Name,\n    va.Address,\n    va.CountryCode,\n    va.CountryName,\n    va.PostalCode\n  ) AS ShipToParty\nFROM live.vbpa_adrc va\nWHERE parvw = 'WE'",
+    "comment": "Ship To Partner",
+    "index": 18
+  },
+  {
+    "type": "dlt-view",
+    "name": "vbpa_billto",
+    "sql": "SELECT\n  vbeln,\n  STRUCT(\n    va.PartnerNumber,\n    va.Name,\n    va.Address,\n    va.CountryCode,\n    va.CountryName,\n    va.PostalCode\n  ) AS BillToParty\nFROM live.vbpa_adrc va\nWHERE parvw = 'RE'",
+    "comment": "Bill to Partner",
+    "index": 19
+  },
+  {
+    "type": "dlt-view",
+    "name": "vbpa_payer",
+    "sql": "SELECT\n  vbeln,\n  STRUCT(\n    va.PartnerNumber,\n    va.Name,\n    va.Address,\n    va.CountryCode,\n    va.CountryName,\n    va.PostalCode\n  ) AS Payer\nFROM live.vbpa_adrc va\nWHERE parvw = 'RG'",
+    "comment": "Payer Partner",
+    "index": 20
+  },
+  {
+    "type": "dlt-view",
+    "name": "vbpa_finaluser",
+    "sql": "SELECT\n  vbeln,\n  STRUCT(\n    va.PartnerNumber,\n    va.Name,\n    va.Address,\n    va.CountryCode,\n    va.CountryName,\n    va.PostalCode\n  ) AS FinalUser\nFROM live.vbpa_adrc va\nWHERE parvw = 'ZU'",
+    "comment": "Final user",
+    "index": 21
+  },
+  {
+    "type": "dlt-view",
+    "name": "status_dates_VBK",
+    "sql": "SELECT\n  SalesOrder,\n  status,\n  description,\n  stat,\n  isActive,\n  lastActiveTime,\n  updateTime\nFROM deltalive.status_dates_{kernel}_VBK\n  INNER JOIN live.vbuk vk ON SalesOrder = vk.vbeln\nWHERE isActive = TRUE\nORDER BY SalesOrder, status",
+    "comment": "Statuses of Sales Order Header",
+    "index": 22
+  },
+  {
+    "type": "dlt-nest",
+    "name": "orderheaderstatus_nested",
+    "comment": "Array of status of Sales Order Header",
+    "sql": "SELECT *\nFROM live.status_dates_VBK",
+    "nested": {
+      "keycolumns": [
+        "SalesOrder"
+      ],
+      "name": "OrderSAPStatus",
+      "partitionkeys": []
+    },
+    "index": 23
+  },
+  {
+    "type": "dlt-table",
+    "name": "myp4p_salesorderheader_{kernel}{testsuffix}",
+    "comment": "MyP4P SalesOrderheader",
+    "sql": "SELECT\n  '{kernel}' AS sysid,\n  v.ernam AS sourceChannel,\n  v.bsark AS PoType,\n  v.auart AS salesDocumentType,\n  v.bstnk AS PartnerPO,\n  --to_date(v.bstdk, 'yyyyMMdd') as PartnerPODate_d,\n  DATE_FORMAT(TO_DATE(v.bstdk, 'yyyyMMdd'), 'yyyy-MM-dd') AS PartnerPODate,\n  v.vbeln AS SalesOrder,\n  --to_date(v.AUDAT, 'yyyyMMdd') as OrderDate_d,\n  DATE_FORMAT(TO_DATE(v.AUDAT, 'yyyyMMdd'), 'yyyy-MM-dd') AS OrderDate,\n  v.lifsk AS DeliveryBlock,\n  v.faksk AS BillingBlock,\n  v.autlf AS CompleteDlvInd,\n  v.vsbed AS ShippingCondition,\n  --to_date(v.vdatu, 'yyyyMMdd') as RequestDlvDt_d,\n  DATE_FORMAT(TO_DATE(v.vdatu, 'yyyyMMdd'), 'yyyy-MM-dd') AS RequestDlvDt,\n  v.netwr AS OrderValue,\n  v.waerk AS CurrencyOfValue,\n  v.ZZSHIP_IND AS ShipmentInd,\n  STRUCT(v.zzquote AS QuoteNo, v.zzprospect AS ProspectNo) AS SFDCOpportunity,\n  STRUCT(\n    --to_date(v.erdat, 'yyyyMMdd') as OrderBookedDate_d,\n    DATE_FORMAT(TO_DATE(v.erdat, 'yyyyMMdd'), 'yyyy-MM-dd') AS OrderBookedDate,\n    vk.gbstk AS OverallOrderStatus,\n    vk.costa AS ConfirmStatus,\n    vk.wbstk AS GoodsMovtStatus,\n    vk.lfgsk AS DeliveryStatus,\n    vk.fksak AS BillingStatus,\n    vk.cmgst AS CreditBlock\n  ) AS Status,\n  soldto.SoldToParty,\n  shipto.ShipToParty,\n  billto.BillToParty,\n  finaluser.FinalUser,\n  payer.Payer,\n  headerstatus.OrderSAPStatus\nFROM live.vbuk vk\n  INNER JOIN live.vbak v ON v.vbeln = vk.vbeln\n  LEFT JOIN live.vbpa_soldto soldto ON v.vbeln = soldto.vbeln\n  LEFT JOIN live.vbpa_shipto shipto ON v.vbeln = shipto.vbeln\n  LEFT JOIN live.vbpa_billto billto ON v.vbeln = billto.vbeln\n  LEFT JOIN live.vbpa_finaluser finaluser ON v.vbeln = finaluser.vbeln\n  LEFT JOIN live.vbpa_payer payer ON v.vbeln = payer.vbeln\n  LEFT JOIN live.orderheaderstatus_nested headerstatus ON v.vbeln = headerstatus.SalesOrder",
+    "temporary": false,
+    "index": 24
+  },
+  {
+    "type": "dlt-nest",
+    "name": "myp4p_salesorderline_nested_{kernel}{testsuffix}",
+    "comment": "MyP4P SalesOrder Lineitems grouped by Sales Order",
+    "sql": "SELECT *\nFROM live.myp4p_salesorderlineitem_{kernel}{testsuffix}",
+    "nested": {
+      "keycolumns": [
+        "sysid",
+        "SalesOrder"
+      ],
+      "name": "SalesOrderDetail",
+      "partitionkeys": []
+    },
+    "index": 25
+  },
+  {
+    "type": "dlt-table",
+    "temporary": false,
+    "name": "myp4p_salesorder_gold_{kernel}{testsuffix}",
+    "sql": "SELECT h.*, l.SalesOrderDetail\nFROM\n  live.myp4p_salesorderheader_{kernel}{testsuffix} h\n  LEFT JOIN live.myp4p_salesorderline_nested_{kernel}{testsuffix} l ON h.sysid = l.sysid\n  AND h.SalesOrder = l.SalesOrder",
+    "comment": "API: myp4p_salesorder_gold table",
+    "index": 26
+  }
+]
